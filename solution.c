@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/mman.h>
 
 #define FILE_PATH "challange/measurements.txt"
 #define N_THREADS 10    // arbitrary, will be one of the parameters for performance tuning later on.
@@ -18,11 +19,15 @@
                            //
 #define max(a, b)  a > b ? a : b
 #define min(a,b) a > b ? b : a
+
+#define RETURN_OK 0
+#define RETURN_ERR 1
+
 // ============== hashmap ======================
 
 struct city_values {
     size_t count;   // NOTE: never create instances with a count of 0, because averages are calculated with sum/count on the fly.
-    uint64_t sum;
+    int64_t sum;
     int8_t min;
     int8_t max;
 };
@@ -52,7 +57,7 @@ struct hashmap *map_create() {
     
     map->_longest_offset = 1; // allow at least one recheck, because otherwise comparisons whether the offset was met will fail when the initial hash returned the correct position
     for (size_t i = 0; i < MAX_KEY_LENGTH; ++i) {
-        map->keys[i][0] = '\0';
+        map->keys[i][0] = '\0'; // mark as empty
     }
 
     return map;
@@ -103,13 +108,13 @@ bool map_update(struct hashmap *map, char key[MAX_KEY_LENGTH], int8_t value){
 struct city_values map_get(struct hashmap *map, char key[MAX_KEY_LENGTH]) {
     size_t index = _map_key_location(map, key);
     if (index == -1) {
-        struct city_values values = { .count = 1 }; // avoid accidental division by 0 problems :)
+        struct city_values values = { .count = -1 }; // avoid accidental division by 0 problems :)
         return values;
     }
     return map->contents[index];
 }
 
-
+/// prints a single city in the format required by the challange: [name]=[average temp]/[min temp]/[max temp]
 void print_city(struct hashmap *map, size_t index) {
     struct city_values values = map->contents[index];
     printf("%.100s=%zul/%d/%d",  map->keys[index], values.sum / values.count, values.min, values.max);
@@ -121,30 +126,79 @@ void print_city(struct hashmap *map, size_t index) {
 static size_t file_size;
 static int fd;
 
+
+
 int get_file_size() {
     fd = open(FILE_PATH, O_RDONLY);  
     if (fd == -1) {
         perror("unable to open file: ");
-        return EXIT_FAILURE;
+        return RETURN_ERR;
     }
 
     struct stat statbuf = {};
 
     if (fstat(fd, &statbuf) == -1) {
         perror("unable to get file stats: ");
-        return EXIT_FAILURE;
+        return RETURN_ERR;
     }
 
     file_size = statbuf.st_size;
 
-    return EXIT_SUCCESS;
+    return RETURN_OK;
+}
+
+
+
+void read_file_in(int fd, struct hashmap *map, size_t len) {
+    char *file_mem = mmap(NULL, len, PROT_READ,  MAP_POPULATE | MAP_PRIVATE, fd, 0);
+    if (file_mem == MAP_FAILED) {
+        perror("mmap failed: ");
+        return;
+    }
+
+
+    char curr_name[MAX_KEY_LENGTH + 1];
+    char curr_temp[5];  // -99.9 is max.
+    int8_t temp;
+    bool sign = false;
+    size_t curr_name_len = 0;
+
+    char *curr_pos = &file_mem[0];
+
+
+    while (curr_pos < file_mem + len) {
+        curr_name_len = 0;
+        // reading in name:
+        for (; *curr_pos != ';'; curr_pos++) {
+           curr_name[curr_name_len++] = *curr_pos; 
+       }
+        curr_name[curr_name_len] = '\0';
+        curr_pos++; // skip ; 
+        // reading in temp:
+        temp = 0;
+        if (*curr_pos == '-') {
+           sign = true; 
+        } else {
+           sign = false; 
+        }
+        for (; *curr_pos != '\n'; ++curr_pos) {
+           if (*curr_pos == '.')  { continue; } 
+            
+           temp *= 10;
+           temp += (int8_t)(*curr_pos - '0');
+        }
+
+        map_update(map, curr_name, temp ) ;
+
+        curr_pos++; // skip \n
+    }
 }
 
 
 
 int main(int argc, char *argv[]) {
 
-    if (get_file_size() != EXIT_SUCCESS) {
+    if (get_file_size() != RETURN_OK) {
         return EXIT_FAILURE;
     }
 
@@ -154,13 +208,14 @@ int main(int argc, char *argv[]) {
     char tohash1[100] = "hello";
     char tohash2[MAX_KEY_LENGTH] ="hell" ;
 
-    map_put(map, tohash1, values);
-    map_put(map, tohash2, values);   
-    map_update(map, tohash2, 120);
-    printf("retreived value: ");
-    print_city(map, _map_key_location(map, tohash2));
-    printf("\n");
-
+//    map_put(map, tohash1, values);
+//    map_put(map, tohash2, values);   
+//    map_update(map, tohash2, 120);
+//    printf("retreived value: ");
+//    print_city(map, _map_key_location(map, tohash2));
+//    printf("\n");
+    printf("file size: %zul\n", file_size);
+    read_file_in(fd, map,  file_size/1000); 
     printf("chunk size: %zul\n", file_size / N_THREADS);
     printf("hashes: %zul, %zul\n", hash(tohash1), hash(tohash2));
     return EXIT_SUCCESS;

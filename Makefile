@@ -1,5 +1,5 @@
 CC = gcc
-CPPFLAGS = -pthread -O3
+CPPFLAGS = -pthread -O3 -Wall -Wextra
 
 TARGET := solution
 
